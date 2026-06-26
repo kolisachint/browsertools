@@ -418,6 +418,47 @@ impl Driver {
         })
     }
 
+    /// Stream JPEG frames (base64) into a broadcast channel every `every_ms`,
+    /// for live view. Interval capture is used rather than CDP screencast because
+    /// in headless mode compositor-driven frames are sparse; a steady low rate
+    /// guarantees the viewer always shows the current page. Returns a handle.
+    pub async fn start_frame_stream(
+        &self,
+        tx: tokio::sync::broadcast::Sender<String>,
+        every_ms: u64,
+    ) -> Result<ScreencastHandle> {
+        let page = self.page.clone();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let mut n: usize = 0;
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    _ = tokio::time::sleep(Duration::from_millis(every_ms)) => {
+                        let params = ScreenshotParams::builder()
+                            .format(CaptureScreenshotFormat::Jpeg)
+                            .quality(50)
+                            .build();
+                        if let Ok(bytes) = page.screenshot(params).await {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            // Ignore send errors (no subscribers yet).
+                            let _ = tx.send(b64);
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            n
+        });
+        Ok(ScreencastHandle { page: self.page.clone(), stop: Some(stop_tx), task })
+    }
+
+    /// The browser's CDP debug WebSocket endpoint — basis for the DevTools
+    /// remote-debugging fallback transport for live view.
+    pub fn devtools_endpoint(&self) -> String {
+        self.browser.websocket_address().clone()
+    }
+
     /// Close the browser cleanly.
     pub async fn close(mut self) -> Result<()> {
         self.browser.close().await.ok();

@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::driver::Driver;
+use crate::liveview::LiveView;
 
 #[derive(Deserialize)]
 struct Request {
@@ -53,6 +54,9 @@ pub async fn run() -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
 
+    // Live view is off by default; the parent turns it on via live_view_start.
+    let mut live: Option<LiveView> = None;
+
     // Announce readiness so the parent knows the browser is up.
     write_line(&mut stdout, &json!({"event": "ready"})).await?;
 
@@ -74,9 +78,42 @@ pub async fn run() -> Result<()> {
             }
         };
 
-        if req.method == "shutdown" {
-            write_line(&mut stdout, &json!({"id": req.id, "result": {"ok": true}})).await?;
-            break;
+        // Lifecycle methods handled here (need the LiveView/loop scope).
+        match req.method.as_str() {
+            "shutdown" => {
+                write_line(&mut stdout, &json!({"id": req.id, "result": {"ok": true}})).await?;
+                break;
+            }
+            "live_view_start" => {
+                let result = match LiveView::start(&driver).await {
+                    Ok(lv) => {
+                        let url = lv.url().to_string();
+                        live = Some(lv);
+                        json!({"url": url, "transport": "websocket"})
+                    }
+                    Err(e) => json!({"error": format!("{e:#}")}),
+                };
+                // Also surface the DevTools fallback endpoint.
+                let devtools = driver.devtools_endpoint();
+                let mut result = result;
+                result["devtools_ws"] = json!(devtools);
+                write_line(&mut stdout, &json!({"id": req.id, "result": result})).await?;
+                continue;
+            }
+            "live_view_stop" => {
+                if let Some(lv) = live.take() {
+                    lv.stop().await;
+                }
+                write_line(&mut stdout, &json!({"id": req.id, "result": {"ok": true}})).await?;
+                continue;
+            }
+            _ => {}
+        }
+
+        // Emit a live action event before the primitive executes, so the viewer
+        // shows the parent's tool call in the moment.
+        if let Some(lv) = &live {
+            lv.action(describe(&req.method, &req.params));
         }
 
         let resp = match dispatch(&driver, &req.method, &req.params).await {
@@ -90,8 +127,28 @@ pub async fn run() -> Result<()> {
         write_line(&mut stdout, &serde_json::to_value(&resp)?).await?;
     }
 
+    if let Some(lv) = live.take() {
+        lv.stop().await;
+    }
     driver.close().await.ok();
     Ok(())
+}
+
+/// Human-readable one-liner for a tool call, shown in the live viewer.
+fn describe(method: &str, p: &Value) -> String {
+    let target = p
+        .get("selector")
+        .or_else(|| p.get("url"))
+        .or_else(|| p.get("keys"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if let Some(value) = p.get("value").and_then(|v| v.as_str()) {
+        format!("▶ {method} {target} = {value:?}")
+    } else if target.is_empty() {
+        format!("▶ {method}")
+    } else {
+        format!("▶ {method} {target}")
+    }
 }
 
 /// Map a method name + params to a driver call, returning the JSON result.
