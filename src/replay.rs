@@ -81,7 +81,12 @@ pub async fn run(
         match outcome {
             Ok(()) => {
                 steps_succeeded += 1;
-                trace.push(StepTrace { id: step.id.clone(), action: label, status: "ok".into(), detail: None });
+                trace.push(StepTrace {
+                    id: step.id.clone(),
+                    action: label,
+                    status: "ok".into(),
+                    detail: None,
+                });
             }
             Err(e) => {
                 let detail = format!("{e:#}");
@@ -109,7 +114,11 @@ pub async fn run(
         }
     }
 
-    let status = if failed_step.is_none() { "success" } else { "failed" };
+    let status = if failed_step.is_none() {
+        "success"
+    } else {
+        "failed"
+    };
 
     // Extract outputs (best effort; only meaningful on success).
     let mut outputs = BTreeMap::new();
@@ -177,13 +186,22 @@ async fn exec_step(
         Action::Navigate { url } => {
             d.navigate(&resolve(url, vars)).await?;
         }
-        Action::Click { selector, fallbacks } => {
+        Action::Click {
+            selector,
+            fallbacks,
+        } => {
             click_with_fallbacks(d, selector, fallbacks).await?;
         }
-        Action::Fill { selector, value_tpl } => {
+        Action::Fill {
+            selector,
+            value_tpl,
+        } => {
             d.fill(selector, &resolve(value_tpl, vars)).await?;
         }
-        Action::Select { selector, value_tpl } => {
+        Action::Select {
+            selector,
+            value_tpl,
+        } => {
             d.select(selector, &resolve(value_tpl, vars)).await?;
         }
         Action::WaitSettle => {
@@ -208,7 +226,10 @@ async fn click_with_fallbacks(d: &Driver, selector: &str, fallbacks: &[String]) 
             return Ok(());
         }
     }
-    anyhow::bail!("click failed for '{selector}' and {} fallback(s)", fallbacks.len())
+    anyhow::bail!(
+        "click failed for '{selector}' and {} fallback(s)",
+        fallbacks.len()
+    )
 }
 
 async fn verify(d: &Driver, inv: &Invariant) -> Result<()> {

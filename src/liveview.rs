@@ -69,7 +69,13 @@ impl LiveView {
             let _ = axum::serve(listener, app).await;
         });
 
-        Ok(LiveView { tx, url, _frames: frames, server, frame_pump })
+        Ok(LiveView {
+            tx,
+            url,
+            _frames: frames,
+            server,
+            frame_pump,
+        })
     }
 
     pub fn url(&self) -> &str {

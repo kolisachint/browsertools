@@ -42,16 +42,26 @@ pub struct Step {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
-    Navigate { url: String },
+    Navigate {
+        url: String,
+    },
     Click {
         selector: String,
         #[serde(default)]
         fallbacks: Vec<String>,
     },
-    Fill { selector: String, value_tpl: String },
-    Select { selector: String, value_tpl: String },
+    Fill {
+        selector: String,
+        value_tpl: String,
+    },
+    Select {
+        selector: String,
+        value_tpl: String,
+    },
     WaitSettle,
-    Checkpoint { asserts: Vec<Invariant> },
+    Checkpoint {
+        asserts: Vec<Invariant>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,8 +105,8 @@ pub enum OnFail {
 impl Flow {
     pub fn load(path: impl AsRef<Path>) -> Result<Flow> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("read flow file {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("read flow file {}", path.display()))?;
         let flow: Flow = serde_json::from_slice(&bytes)
             .with_context(|| format!("parse flow file {}", path.display()))?;
         Ok(flow)
@@ -132,7 +142,10 @@ mod tests {
         let mut vars = BTreeMap::new();
         vars.insert("base".to_string(), "http://x/".to_string());
         vars.insert("q".to_string(), "rust".to_string());
-        assert_eq!(resolve("{{base}}search?q={{q}}", &vars), "http://x/search?q=rust");
+        assert_eq!(
+            resolve("{{base}}search?q={{q}}", &vars),
+            "http://x/search?q=rust"
+        );
     }
 
     #[test]

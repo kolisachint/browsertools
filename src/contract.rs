@@ -85,9 +85,19 @@ pub enum ParentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "response", rename_all = "snake_case")]
 pub enum ParentResponse {
-    State { state: String },
-    Verified { passed: bool },
-    Extracted { fields: std::collections::BTreeMap<String, String> },
-    NextAction { action: serde_json::Value },
-    Element { selector: String },
+    State {
+        state: String,
+    },
+    Verified {
+        passed: bool,
+    },
+    Extracted {
+        fields: std::collections::BTreeMap<String, String>,
+    },
+    NextAction {
+        action: serde_json::Value,
+    },
+    Element {
+        selector: String,
+    },
 }

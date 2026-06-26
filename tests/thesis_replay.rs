@@ -65,13 +65,20 @@ fn replay_survives_twenty_runs() {
             serde_json::from_slice(&out.stdout).expect("run-flow stdout is JSON");
 
         assert_eq!(v["status"], "success", "run {i} not success: {v}");
-        assert_eq!(v["outputs"]["title"], "The Silent Compiler", "run {i} title");
+        assert_eq!(
+            v["outputs"]["title"], "The Silent Compiler",
+            "run {i} title"
+        );
         assert_eq!(v["outputs"]["price"], "£42.10", "run {i} price");
         assert_eq!(v["checkpoints_passed"], 2, "run {i} checkpoints");
 
         hashes.insert(v["screenshot_hash"].as_str().unwrap().to_string());
         successes += 1;
-        eprintln!("run {:02}/{N}: ok  sig={}", i + 1, &v["screenshot_hash"].as_str().unwrap()[..16]);
+        eprintln!(
+            "run {:02}/{N}: ok  sig={}",
+            i + 1,
+            &v["screenshot_hash"].as_str().unwrap()[..16]
+        );
     }
 
     assert_eq!(successes, N, "all {N} runs must succeed");
