@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture Bookstore — Catalogue</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #222; }
+    header { border-bottom: 2px solid #2a6; padding-bottom: .5rem; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2rem; margin-top: 1.5rem; }
+    .product_pod { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; }
+    .product_pod h3 { margin: .3rem 0; font-size: 1rem; }
+    .price_color { color: #2a6; font-weight: 700; }
+    .thumb { height: 110px; background: linear-gradient(135deg,#cfe,#9cd); border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <header><h1>Fixture Bookstore</h1><nav>Catalogue</nav></header>
+  <main>
+    <section class="grid">
+      <article class="product_pod">
+        <div class="thumb"></div>
+        <h3><a href="catalogue/the-silent-compiler.html">The Silent Compiler</a></h3>
+        <p class="price_color">£42.10</p>
+        <p class="instock availability">In stock</p>
+      </article>
+      <article class="product_pod">
+        <div class="thumb"></div>
+        <h3><a href="catalogue/deterministic-replay.html">Deterministic Replay</a></h3>
+        <p class="price_color">£37.55</p>
+        <p class="instock availability">In stock</p>
+      </article>
+      <article class="product_pod">
+        <div class="thumb"></div>
+        <h3><a href="catalogue/the-headless-browser.html">The Headless Browser</a></h3>
+        <p class="price_color">£51.00</p>
+        <p class="instock availability">In stock</p>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

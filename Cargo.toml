@@ -1,0 +1,19 @@
+[package]
+name = "browsertools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "browsertools"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+anyhow = "1"
+scraper = "0.20"
+clap = { version = "4", features = ["derive"] }
