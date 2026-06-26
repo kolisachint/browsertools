@@ -137,6 +137,37 @@ impl Driver {
         Ok(())
     }
 
+    /// Hover an element (reveals tooltips / dropdowns).
+    pub async fn hover(&self, selector: &str) -> Result<()> {
+        let el = self
+            .page
+            .find_element(selector)
+            .await
+            .with_context(|| format!("find element to hover: {selector}"))?;
+        el.hover().await.with_context(|| format!("hover: {selector}"))?;
+        Ok(())
+    }
+
+    /// Choose an option in a <select> by value, dispatching a change event.
+    pub async fn select(&self, selector: &str, value: &str) -> Result<()> {
+        let js = format!(
+            "(() => {{ const e = document.querySelector({sel}); if (!e) return false; \
+             e.value = {val}; e.dispatchEvent(new Event('change', {{bubbles:true}})); return true; }})()",
+            sel = serde_json::to_string(selector)?,
+            val = serde_json::to_string(value)?,
+        );
+        let ok: bool = self
+            .page
+            .evaluate(js)
+            .await?
+            .into_value()
+            .unwrap_or(false);
+        if !ok {
+            return Err(anyhow!("select: element not found: {selector}"));
+        }
+        Ok(())
+    }
+
     /// Press a key / key-chord (e.g. "Enter") on the currently focused element,
     /// falling back to <body> if nothing is focused.
     pub async fn key_press(&self, keys: &str) -> Result<()> {
