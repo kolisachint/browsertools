@@ -1,0 +1,44 @@
+{
+  "id": "bookstore_first_book",
+  "name": "Bookstore: open the first book and extract title + price",
+  "version": 1,
+  "start_url": "{{base}}",
+  "vars": [
+    { "key": "base", "required": true, "example": "http://127.0.0.1:8732/" }
+  ],
+  "steps": [
+    { "id": "s01", "action": { "action": "navigate", "url": "{{base}}" }, "on_fail": "halt" },
+    { "id": "s02", "action": { "action": "wait_settle" }, "on_fail": "halt" },
+    {
+      "id": "s03",
+      "action": {
+        "action": "checkpoint",
+        "asserts": [{ "kind": "element_present", "selector": ".product_pod h3 a" }]
+      },
+      "on_fail": "halt"
+    },
+    {
+      "id": "s04",
+      "action": { "action": "click", "selector": ".product_pod h3 a", "fallbacks": ["article h3 a"] },
+      "on_fail": "halt"
+    },
+    { "id": "s05", "action": { "action": "wait_settle" }, "on_fail": "halt" },
+    {
+      "id": "s06",
+      "action": {
+        "action": "checkpoint",
+        "asserts": [
+          { "kind": "element_present", "selector": "h1" },
+          { "kind": "element_present", "selector": ".price_color" },
+          { "kind": "url_matches", "pattern": "catalogue/" }
+        ]
+      },
+      "on_fail": "halt"
+    }
+  ],
+  "outputs": [
+    { "key": "title", "source": { "from": "text", "selector": "h1" } },
+    { "key": "price", "source": { "from": "text", "selector": ".price_color" } },
+    { "key": "url", "source": { "from": "url" } }
+  ]
+}

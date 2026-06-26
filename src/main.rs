@@ -1,10 +1,16 @@
+mod contract; // P2 yield contract (frozen, not yet exercised)
+mod discover; // P2 discovery stubs (frozen signatures)
 mod driver;
+mod flow;
 mod liveview;
 mod observe;
+mod replay;
 mod serve;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -18,16 +24,52 @@ struct Cli {
 enum Cmd {
     /// Long-running native protocol: newline-delimited JSON on stdin/stdout.
     Serve,
+    /// Replay a saved flow once (deterministic, zero LLM) and write evidence.
+    RunFlow {
+        /// Path to the flow JSON file.
+        #[arg(long)]
+        flow: PathBuf,
+        /// Variable assignment, repeatable: --var key=value
+        #[arg(long = "var", value_parser = parse_kv)]
+        vars: Vec<(String, String)>,
+        /// Evidence store root (a `.hoocode` tree is created under it).
+        #[arg(long, default_value = ".hoocode")]
+        store: PathBuf,
+    },
     /// One-shot demo exercising the primitives against a fixture site.
     Demo,
+}
+
+fn parse_kv(s: &str) -> Result<(String, String), String> {
+    s.split_once('=')
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .ok_or_else(|| format!("expected key=value, got '{s}'"))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Serve => serve::run().await,
+        Cmd::RunFlow { flow, vars, store } => run_flow(flow, vars, store).await,
         Cmd::Demo => demo().await,
     }
+}
+
+/// `run_flow` one-shot: load a flow, replay it, print the RunResult JSON.
+/// Exits non-zero if the flow did not succeed.
+async fn run_flow(flow_path: PathBuf, vars: Vec<(String, String)>, store: PathBuf) -> Result<()> {
+    let flow = flow::Flow::load(&flow_path)?;
+    let vars: BTreeMap<String, String> = vars.into_iter().collect();
+
+    let d = driver::Driver::launch().await?;
+    let result = replay::run(&d, &flow, &vars, Some(store.as_path())).await?;
+    d.close().await.ok();
+
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    if !result.succeeded() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 async fn pause(ms: u64) {

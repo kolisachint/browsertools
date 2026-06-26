@@ -7,15 +7,11 @@
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use chromiumoxide::browser::{Browser, BrowserConfig};
-use chromiumoxide::cdp::browser_protocol::page::{
-    CaptureScreenshotFormat, EventScreencastFrame, ScreencastFrameAckParams, StartScreencastFormat,
-    StartScreencastParams, StopScreencastParams,
-};
+use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, StopScreencastParams};
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Path to the pre-installed Chromium in this environment.
@@ -216,6 +212,11 @@ impl Driver {
         Ok(())
     }
 
+    /// Whether an element matching the selector currently exists.
+    pub async fn exists(&self, selector: &str) -> bool {
+        self.page.find_element(selector).await.is_ok()
+    }
+
     /// Current page URL.
     pub async fn get_url(&self) -> Result<String> {
         Ok(self.page.url().await?.unwrap_or_default())
@@ -322,99 +323,6 @@ impl Driver {
             load,
             network_idle,
             timed_out: start.elapsed() >= timeout && !(load && network_idle),
-        })
-    }
-
-    /// Begin a live screencast: CDP streams JPEG frames as the page renders.
-    /// Each frame is base64-decoded and written as `frame_NNNNN.jpg` into
-    /// `out_dir`. Returns a handle; call `.stop()` to end and get the count.
-    ///
-    /// This is the "see it live" mechanism for a headless browser — the engine
-    /// taps the same CDP connection it drives with. In production these frames
-    /// are forwarded to the parent (as protocol notifications) rather than disk.
-    pub async fn start_screencast(&self, out_dir: PathBuf, max_width: i64) -> Result<ScreencastHandle> {
-        std::fs::create_dir_all(&out_dir).ok();
-        let page = self.page.clone();
-        let mut frames = page.event_listener::<EventScreencastFrame>().await?;
-
-        page.execute(
-            StartScreencastParams::builder()
-                .format(StartScreencastFormat::Jpeg)
-                .quality(60)
-                .max_width(max_width)
-                .every_nth_frame(1)
-                .build(),
-        )
-        .await
-        .context("start screencast")?;
-
-        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(async move {
-            let mut n: usize = 0;
-            loop {
-                tokio::select! {
-                    _ = &mut stop_rx => break,
-                    maybe = frames.next() => {
-                        let Some(frame) = maybe else { break };
-                        let b64: &str = frame.data.as_ref();
-                        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                            let path = out_dir.join(format!("frame_{n:05}.jpg"));
-                            let _ = std::fs::write(path, bytes);
-                            n += 1;
-                        }
-                        // Must ack or Chromium stops sending frames.
-                        let _ = page
-                            .execute(ScreencastFrameAckParams::new(frame.session_id))
-                            .await;
-                    }
-                }
-            }
-            n
-        });
-
-        Ok(ScreencastHandle {
-            page: self.page.clone(),
-            stop: Some(stop_tx),
-            task,
-        })
-    }
-
-    /// Capture a screenshot every `every_ms` into `out_dir` as `frame_NNNNN.png`.
-    ///
-    /// Fixed-rate fallback for "live view" in headless mode, where CDP screencast
-    /// emits frames only on compositor changes (sparse). Heavier than screencast
-    /// but yields a smooth, deterministic frame sequence for a video.
-    pub async fn start_interval_capture(
-        &self,
-        out_dir: PathBuf,
-        every_ms: u64,
-    ) -> Result<ScreencastHandle> {
-        std::fs::create_dir_all(&out_dir).ok();
-        let page = self.page.clone();
-        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(async move {
-            let mut n: usize = 0;
-            loop {
-                tokio::select! {
-                    _ = &mut stop_rx => break,
-                    _ = tokio::time::sleep(Duration::from_millis(every_ms)) => {
-                        let params = ScreenshotParams::builder()
-                            .format(CaptureScreenshotFormat::Png)
-                            .build();
-                        if let Ok(bytes) = page.screenshot(params).await {
-                            let path = out_dir.join(format!("frame_{n:05}.png"));
-                            let _ = std::fs::write(path, bytes);
-                            n += 1;
-                        }
-                    }
-                }
-            }
-            n
-        });
-        Ok(ScreencastHandle {
-            page: self.page.clone(),
-            stop: Some(stop_tx),
-            task,
         })
     }
 
