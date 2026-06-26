@@ -242,6 +242,28 @@ stable → the core bet is fragile, learned in days for the cost of one binary.
 
 ---
 
+## 10b. Live view (decided; built right after `serve`)
+
+The human can watch the browser act in real time, synced to the parent's tool
+calls. Mechanism, hung off the `serve` dispatch loop:
+
+- Before each primitive executes, `serve` emits an **action event**
+  (`▶ click #buy`) — this is what makes it "watch the LLM's tool calls", not just
+  "watch a browser". Free: `serve` is already the chokepoint for every call.
+- **Primary transport:** CDP `Page.startScreencast` frames + action events
+  streamed over a **WebSocket** to a small viewer page the human opens. Headless,
+  real-time, read-only.
+- **Fallback transport:** Chromium `--remote-debugging-port` + the DevTools
+  inspector frontend. Almost no code; exposes full CDP; used when the WS viewer
+  isn't wanted.
+- Off by default (overhead + privacy). Parent enables via `live_view_start`,
+  which returns a URL. Frames ride a separate WS so JSON-RPC stdout stays clean.
+- **Reachability:** only useful where the viewer port is reachable (hoocode local
+  → `localhost:PORT`, or a port-forwarded/preview env). Not viewable through a
+  chat surface.
+
+Order: `observe` → `serve` → **live view** → replayer → `run_flow` thesis test.
+
 ## 11. Build order
 
 1. **Engine core + chromiumoxide driver** — primitives as a Rust API.

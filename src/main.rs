@@ -1,4 +1,5 @@
 mod driver;
+mod observe;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -57,6 +58,18 @@ async fn main() -> Result<()> {
     let price = d.get_text(".price_color").await.unwrap_or_default();
     println!("[extract] url={url}");
     println!("[extract] title={title:?} price={price:?}");
+
+    // deterministic observation (what the parent LLM would receive)
+    let obs = d.observe().await?;
+    println!("[observe] state_signature={}", obs.state_signature);
+    println!(
+        "[observe] title={:?} landmarks={} inputs={} headings={:?} error={}",
+        obs.title,
+        obs.landmarks.len(),
+        obs.inputs.len(),
+        obs.text_blocks,
+        obs.has_error_region
+    );
     pause(500).await;
 
     // 4) evidence screenshot

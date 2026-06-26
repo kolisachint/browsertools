@@ -200,6 +200,30 @@ impl Driver {
         Ok(bytes)
     }
 
+    /// Deterministic observation of the current page: DOM-derived facts plus a
+    /// content-invariant `state_signature` and a screenshot reference. No
+    /// interpretation — that is the parent LLM's job.
+    pub async fn observe(&self) -> Result<crate::observe::Observation> {
+        // Capture inputs first (these await), then parse synchronously so the
+        // non-Send `scraper::Html` never crosses an await point.
+        let url = self.get_url().await?;
+        let html = self.dom_html().await?;
+        let png = self.screenshot(false).await?;
+        let screenshot_ref = blake3::hash(&png).to_hex().to_string();
+
+        let facts = crate::observe::analyze(&html);
+        Ok(crate::observe::Observation {
+            url,
+            title: facts.title,
+            inputs: facts.inputs,
+            landmarks: facts.landmarks,
+            text_blocks: facts.text_blocks,
+            has_error_region: facts.has_error_region,
+            state_signature: facts.state_signature,
+            screenshot_ref,
+        })
+    }
+
     /// Return the full serialized DOM (outerHTML of <html>). Used by `observe`
     /// to compute the state signature and extract deterministic facts.
     pub async fn dom_html(&self) -> Result<String> {
