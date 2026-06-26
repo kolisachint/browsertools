@@ -17,3 +17,4 @@ blake3 = "1"
 anyhow = "1"
 scraper = "0.20"
 clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
