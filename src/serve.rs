@@ -117,11 +117,17 @@ pub async fn run() -> Result<()> {
         }
 
         let resp = match dispatch(&driver, &req.method, &req.params).await {
-            Ok(result) => Response { id: req.id, result: Some(result), error: None },
+            Ok(result) => Response {
+                id: req.id,
+                result: Some(result),
+                error: None,
+            },
             Err(e) => Response {
                 id: req.id,
                 result: None,
-                error: Some(RpcError { message: format!("{e:#}") }),
+                error: Some(RpcError {
+                    message: format!("{e:#}"),
+                }),
             },
         };
         write_line(&mut stdout, &serde_json::to_value(&resp)?).await?;
@@ -163,11 +169,13 @@ async fn dispatch(d: &Driver, method: &str, p: &Value) -> Result<Value> {
             json!({"ok": true})
         }
         "fill" => {
-            d.fill(&str_param(p, "selector")?, &str_param(p, "value")?).await?;
+            d.fill(&str_param(p, "selector")?, &str_param(p, "value")?)
+                .await?;
             json!({"ok": true})
         }
         "select" => {
-            d.select(&str_param(p, "selector")?, &str_param(p, "value")?).await?;
+            d.select(&str_param(p, "selector")?, &str_param(p, "value")?)
+                .await?;
             json!({"ok": true})
         }
         "hover" => {
@@ -190,12 +198,17 @@ async fn dispatch(d: &Driver, method: &str, p: &Value) -> Result<Value> {
         }
         "get_text" => json!({"text": d.get_text(&str_param(p, "selector")?).await?}),
         "get_attr" => {
-            let v = d.get_attr(&str_param(p, "selector")?, &str_param(p, "attr")?).await?;
+            let v = d
+                .get_attr(&str_param(p, "selector")?, &str_param(p, "attr")?)
+                .await?;
             json!({ "value": v })
         }
         "get_url" => json!({"url": d.get_url().await?}),
         "screenshot" => {
-            let full = p.get("full_page").and_then(|v| v.as_bool()).unwrap_or(false);
+            let full = p
+                .get("full_page")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let png = d.screenshot(full).await?;
             let hash = blake3::hash(&png).to_hex().to_string();
             let b64 = base64::engine::general_purpose::STANDARD.encode(&png);

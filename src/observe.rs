@@ -15,7 +15,7 @@ pub type ResourceId = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputFact {
-    pub kind: String,           // "text" | "password" | "select" | "button" | ...
+    pub kind: String,            // "text" | "password" | "select" | "button" | ...
     pub accessible_name: String, // aria-label / placeholder / name — best effort
     pub selector_hint: String,   // a best-effort selector to reach it
 }
@@ -41,7 +41,9 @@ pub struct Observation {
 /// Strip ASCII digits so per-run identifiers (counts, ids) don't perturb the
 /// structural signature.
 fn strip_digits(s: &str) -> String {
-    s.chars().filter(|c| !c.is_ascii_digit()).collect::<String>()
+    s.chars()
+        .filter(|c| !c.is_ascii_digit())
+        .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -106,7 +108,11 @@ pub fn analyze(html: &str) -> AnalyzedFacts {
         } else {
             v.name().to_string()
         };
-        inputs.push(InputFact { kind, accessible_name, selector_hint });
+        inputs.push(InputFact {
+            kind,
+            accessible_name,
+            selector_hint,
+        });
     }
 
     // Landmarks.
@@ -115,10 +121,7 @@ pub fn analyze(html: &str) -> AnalyzedFacts {
     for el in doc.select(&land) {
         let v = el.value();
         let role = v.attr("role").unwrap_or(v.name()).to_string();
-        let name = v
-            .attr("aria-label")
-            .unwrap_or("")
-            .to_string();
+        let name = v.attr("aria-label").unwrap_or("").to_string();
         landmarks.push(Landmark { role, name });
     }
 

@@ -14,7 +14,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "browsertools", about = "Deterministic browser engine (no LLM in-process)")]
+#[command(
+    name = "browsertools",
+    about = "Deterministic browser engine (no LLM in-process)"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -112,7 +115,11 @@ async fn demo() -> Result<()> {
     let png = d.screenshot(true).await?;
     let hash = blake3::hash(&png);
     std::fs::write(&shot, &png)?;
-    println!("[evidence] screenshot {} bytes -> {shot} (blake3={})", png.len(), hash.to_hex());
+    println!(
+        "[evidence] screenshot {} bytes -> {shot} (blake3={})",
+        png.len(),
+        hash.to_hex()
+    );
 
     pause(100).await;
     d.close().await?;

@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 1. Bump version, commit, push, annotated tag ──────────────────────
+  bump-and-tag:
+    if: >
+      github.event.pull_request.merged == true && (
+        contains(github.event.pull_request.labels.*.name, 'cargo:patch') ||
+        contains(github.event.pull_request.labels.*.name, 'cargo:minor') ||
+        contains(github.event.pull_request.labels.*.name, 'cargo:major')
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Determine release type from label
+        id: release-type
+        run: |
+          if ${{ contains(github.event.pull_request.labels.*.name, 'cargo:major') }}; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          elif ${{ contains(github.event.pull_request.labels.*.name, 'cargo:minor') }}; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump version in Cargo.toml
+        id: bump
+        run: |
+          CURRENT_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "Current version: $CURRENT_VERSION"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          BUMP_TYPE="${{ steps.release-type.outputs.type }}"
+          case "$BUMP_TYPE" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "New version: $NEW_VERSION"
+
+          sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+
+          cargo update
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and tag
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          git add Cargo.toml Cargo.lock
+          git commit -m "release: v${VERSION}"
+          git tag -a "v${VERSION}" -m "release: v${VERSION}"
+
+      - name: Push version bump and tag
+        run: git push --follow-tags origin main
+
+  # ── 2. Create the GitHub release ──────────────────────────────────────
+  create-release:
+    name: Create GitHub release
+    needs: [bump-and-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ needs.bump-and-tag.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists"
+          else
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+
+  # ── 3. Cross-platform binary builds ───────────────────────────────────
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [create-release, bump-and-tag]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Build and upload
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: browsertools
+          target: ${{ matrix.target }}
+          archive: browsertools-$target
+          checksum: sha256
+          ref: refs/tags/${{ needs.bump-and-tag.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 4. Aggregate SHA256SUMS ───────────────────────────────────────────
+  checksums:
+    name: Aggregate SHA256SUMS
+    needs: [build, bump-and-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build SHA256SUMS from per-asset checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.bump-and-tag.outputs.tag }}"
+          mkdir sums && cd sums
+          gh release download "$tag" --pattern '*.sha256' --dir .
+          : > SHA256SUMS
+          for f in *.sha256; do
+            awk '{ n = $2; sub(/.*\//, "", n); print $1 "  " n }' "$f" >> SHA256SUMS
+          done
+          sort -k2 -o SHA256SUMS SHA256SUMS
+          echo "==== SHA256SUMS ===="; cat SHA256SUMS
+          gh release upload "$tag" SHA256SUMS --clobber

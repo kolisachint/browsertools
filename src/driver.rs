@@ -82,15 +82,11 @@ impl Driver {
             .build()
             .map_err(|e| anyhow!("browser config: {e}"))?;
 
-        let (browser, mut handler) = Browser::launch(config)
-            .await
-            .context("launch chromium")?;
+        let (browser, mut handler) = Browser::launch(config).await.context("launch chromium")?;
 
         // Keep polling the CDP connection for its whole lifetime. Transient event
         // errors must not stop the loop, or every later command would hang.
-        let handler = tokio::spawn(async move {
-            while handler.next().await.is_some() {}
-        });
+        let handler = tokio::spawn(async move { while handler.next().await.is_some() {} });
 
         let page = browser.new_page("about:blank").await.context("new page")?;
 
@@ -115,7 +111,9 @@ impl Driver {
             .find_element(selector)
             .await
             .with_context(|| format!("find element to click: {selector}"))?;
-        el.click().await.with_context(|| format!("click: {selector}"))?;
+        el.click()
+            .await
+            .with_context(|| format!("click: {selector}"))?;
         Ok(())
     }
 
@@ -140,7 +138,9 @@ impl Driver {
             .find_element(selector)
             .await
             .with_context(|| format!("find element to hover: {selector}"))?;
-        el.hover().await.with_context(|| format!("hover: {selector}"))?;
+        el.hover()
+            .await
+            .with_context(|| format!("hover: {selector}"))?;
         Ok(())
     }
 
@@ -152,12 +152,7 @@ impl Driver {
             sel = serde_json::to_string(selector)?,
             val = serde_json::to_string(value)?,
         );
-        let ok: bool = self
-            .page
-            .evaluate(js)
-            .await?
-            .into_value()
-            .unwrap_or(false);
+        let ok: bool = self.page.evaluate(js).await?.into_value().unwrap_or(false);
         if !ok {
             return Err(anyhow!("select: element not found: {selector}"));
         }
@@ -358,7 +353,11 @@ impl Driver {
             }
             n
         });
-        Ok(ScreencastHandle { page: self.page.clone(), stop: Some(stop_tx), task })
+        Ok(ScreencastHandle {
+            page: self.page.clone(),
+            stop: Some(stop_tx),
+            task,
+        })
     }
 
     /// The browser's CDP debug WebSocket endpoint — basis for the DevTools
