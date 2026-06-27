@@ -15,7 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 /// Path to the pre-installed Chromium in this environment.
-const CHROMIUM_PATH: &str = "/opt/pw-browsers/chromium";
+/// Set CHROME_PATH to override.
+fn chromium_path() -> String {
+    std::env::var("CHROME_PATH").unwrap_or_else(|_| "/opt/pw-browsers/chromium".to_string())
+}
 
 /// Result of waiting for the page to settle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,14 +64,20 @@ impl Driver {
     /// (b) trust the proxy CA via the NSS store at `$HOME/.pki/nssdb`.
     pub async fn launch() -> Result<Self> {
         let mut builder = BrowserConfig::builder()
-            .chrome_executable(CHROMIUM_PATH)
+            .chrome_executable(chromium_path())
             .disable_default_args()
             .new_headless_mode()
             .no_sandbox()
             .arg("--disable-gpu")
             .arg("--disable-dev-shm-usage")
             .arg("--no-first-run")
-            .arg("--mute-audio");
+            .arg("--mute-audio")
+            .arg("--disable-software-rasterizer")
+            .arg("--disable-background-networking")
+            .arg("--disable-default-apps")
+            .arg("--disable-extensions")
+            .arg("--disable-sync")
+            .arg("--noerrdialogs");
 
         // Route external traffic through the agent proxy. Chromium bypasses
         // loopback by default, so local fixture servers are reached directly.
