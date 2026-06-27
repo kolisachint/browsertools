@@ -69,13 +69,18 @@ Replay normally needs no model. When a flow hits something only an LLM can
 resolve, the engine does not fail: it **suspends** and yields a typed
 `ParentRequest` so the parent (the LLM agent) can resolve it, then **resumes**
 deterministically. This runs over `serve`, where the browser persists across the
-suspension. Two yield points are wired today:
+suspension. All five yield points in the contract are wired:
 
 - **`reidentify_element`** — a click whose selector has *drifted* off the live
   DOM; the parent supplies a corrected selector.
 - **`decide_next_action`** — a `decide` step (a recorded decision point with no
   fixed action); the engine hands over the page `observation` and the parent
   returns the concrete primitive action to run next.
+- **`classify_state`** — a `classify` step; the parent labels the current page.
+- **`verify_visual`** — a `verify_visual` step; the parent confirms the page
+  matches an expected state. A `false` verdict fails the run, like a checkpoint.
+- **`extract_semantic`** — an `extract_semantic` step; the parent reads fields
+  that live in pixels (charts, canvas), merged into the run outputs.
 
 ```jsonc
 // Start a flow (inline `flow` object or `flow_path`, plus vars):
@@ -99,10 +104,9 @@ suspension. Two yield points are wired today:
 {"id":2,"result":{"outcome":"complete","result":{"status":"success", …}}}
 ```
 
-The request/response variants are the frozen contract in `src/contract.rs`;
-`ReidentifyElement` and `DecideNextAction` are wired today, the remaining
-variants drop into the same pause/resume machinery. See
-`tests/tier2_reidentify.rs` and `tests/tier2_decide.rs` for full round-trips.
+The request/response variants are the frozen contract in `src/contract.rs`, all
+wired through the same pause/resume machinery. See `tests/tier2_reidentify.rs`,
+`tests/tier2_decide.rs`, and `tests/tier2_judgment.rs` for full round-trips.
 
 ## Live view
 

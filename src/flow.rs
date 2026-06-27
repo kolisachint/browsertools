@@ -68,6 +68,18 @@ pub enum Action {
     Decide {
         goal: String,
     },
+    /// Ask the parent to classify the current page state (Tier 2).
+    Classify,
+    /// Ask the parent to confirm the page visually matches `expected_state`
+    /// (Tier 2). A `false` verdict fails the run, like a checkpoint.
+    VerifyVisual {
+        expected_state: String,
+    },
+    /// Ask the parent to read `fields` that live in pixels, not the text DOM
+    /// (Tier 2). Returned values are merged into the run outputs.
+    ExtractSemantic {
+        fields: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -13,6 +13,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::contract::{ParentRequest, ParentResponse, ResumeToken};
 use crate::driver::Driver;
 use crate::flow::{resolve, Action, Flow, Invariant, OnFail, Source};
+use crate::observe::Observation;
 
 #[derive(Debug, Serialize)]
 pub struct StepTrace {
@@ -238,9 +239,13 @@ async fn exec_step(
             }
             *checkpoints_passed += 1;
         }
-        Action::Decide { .. } => {
+        Action::Decide { .. }
+        | Action::Classify
+        | Action::VerifyVisual { .. }
+        | Action::ExtractSemantic { .. } => {
             anyhow::bail!(
-                "a `decide` step needs a parent; run it via serve flow_start, not one-shot replay"
+                "a parent-in-the-loop step needs a parent; run it via serve flow_start, \
+                 not one-shot replay"
             );
         }
     }
@@ -314,6 +319,12 @@ enum Pending {
     Reidentify { step_id: String, token: ResumeToken },
     /// A `decide` step; we asked the parent for the next action to take.
     Decide { step_id: String, token: ResumeToken },
+    /// A `classify` step; we asked the parent to label the page state.
+    Classify { step_id: String, token: ResumeToken },
+    /// A `verify_visual` step; we asked the parent for a visual pass/fail.
+    VerifyVisual { step_id: String, token: ResumeToken },
+    /// An `extract_semantic` step; we asked the parent to read pixel fields.
+    ExtractSemantic { step_id: String, token: ResumeToken },
 }
 
 /// Corrective inputs the parent supplied via `resume`, keyed by step.
@@ -354,6 +365,9 @@ pub struct FlowRun {
     /// so the parent can fetch what it is being asked to reason over while the
     /// run is suspended. Lives only as long as the run.
     resources: BTreeMap<String, Vec<u8>>,
+    /// Outputs the parent supplied via `extract_semantic`, merged into the final
+    /// outputs alongside the DOM-extracted ones.
+    extra_outputs: BTreeMap<String, String>,
 }
 
 impl FlowRun {
@@ -380,6 +394,7 @@ impl FlowRun {
             pending: None,
             token_seq: 0,
             resources: BTreeMap::new(),
+            extra_outputs: BTreeMap::new(),
         })
     }
 
@@ -391,6 +406,36 @@ impl FlowRun {
     /// Fetch evidence bytes a yielded request referenced (e.g. its screenshot).
     pub fn resource(&self, id: &str) -> Option<&[u8]> {
         self.resources.get(id).map(|v| v.as_slice())
+    }
+
+    /// Capture a screenshot, retain it as a fetchable resource, return its ref.
+    async fn capture_ref(&mut self, d: &Driver) -> Result<String> {
+        let png = d.screenshot(false).await?;
+        let screenshot_ref = blake3::hash(&png).to_hex().to_string();
+        self.resources.insert(screenshot_ref.clone(), png);
+        Ok(screenshot_ref)
+    }
+
+    /// Capture a screenshot resource plus a deterministic observation whose
+    /// `screenshot_ref` points at those exact bytes.
+    async fn observe_with_ref(&mut self, d: &Driver) -> Result<(String, Observation)> {
+        let screenshot_ref = self.capture_ref(d).await?;
+        let mut observation = d.observe().await?;
+        observation.screenshot_ref = screenshot_ref.clone();
+        Ok((screenshot_ref, observation))
+    }
+
+    /// Record a successful parent-resolved step and move the cursor on.
+    fn parent_step_ok(&mut self, step_id: String, detail: String) {
+        self.steps_executed += 1;
+        self.steps_succeeded += 1;
+        self.trace.push(StepTrace {
+            id: step_id,
+            action: detail,
+            status: "ok".into(),
+            detail: None,
+        });
+        self.cursor += 1;
     }
 
     fn ok_step(&mut self, id: String, label: String) {
@@ -429,11 +474,9 @@ impl FlowRun {
                     Err(e) if step.on_fail == OnFail::Halt => {
                         // Required click drifted: suspend and ask the parent to
                         // re-identify the element rather than failing the run.
-                        let png = d.screenshot(false).await?;
-                        let screenshot_ref = blake3::hash(&png).to_hex().to_string();
                         // Retain the bytes so the parent can fetch them by ref
                         // (get_resource) while deciding how to re-identify.
-                        self.resources.insert(screenshot_ref.clone(), png);
+                        let screenshot_ref = self.capture_ref(d).await?;
                         let token = self.next_token();
                         let description =
                             format!("{label}: selector {selector:?} no longer matches ({e:#})");
@@ -466,11 +509,7 @@ impl FlowRun {
 
             // A decision point: observe and ask the parent what to do next.
             if let Action::Decide { goal } = &step.action {
-                let png = d.screenshot(false).await?;
-                let screenshot_ref = blake3::hash(&png).to_hex().to_string();
-                self.resources.insert(screenshot_ref.clone(), png);
-                let mut observation = d.observe().await?;
-                observation.screenshot_ref = screenshot_ref.clone();
+                let (screenshot_ref, observation) = self.observe_with_ref(d).await?;
                 let token = self.next_token();
                 self.pending = Some(Pending::Decide {
                     step_id: step.id.clone(),
@@ -481,6 +520,57 @@ impl FlowRun {
                         screenshot_ref,
                         observation,
                         goal: goal.clone(),
+                    },
+                    token,
+                });
+            }
+
+            // Classify the current page state.
+            if let Action::Classify = &step.action {
+                let (screenshot_ref, observation) = self.observe_with_ref(d).await?;
+                let token = self.next_token();
+                self.pending = Some(Pending::Classify {
+                    step_id: step.id.clone(),
+                    token: token.clone(),
+                });
+                return Ok(Progress::Paused {
+                    request: ParentRequest::ClassifyState {
+                        screenshot_ref,
+                        observation,
+                    },
+                    token,
+                });
+            }
+
+            // Visual confirmation that a DOM-invisible expectation holds.
+            if let Action::VerifyVisual { expected_state } = &step.action {
+                let screenshot_ref = self.capture_ref(d).await?;
+                let token = self.next_token();
+                self.pending = Some(Pending::VerifyVisual {
+                    step_id: step.id.clone(),
+                    token: token.clone(),
+                });
+                return Ok(Progress::Paused {
+                    request: ParentRequest::VerifyVisual {
+                        screenshot_ref,
+                        expected_state: expected_state.clone(),
+                    },
+                    token,
+                });
+            }
+
+            // Read fields that live in pixels rather than the text DOM.
+            if let Action::ExtractSemantic { fields } = &step.action {
+                let screenshot_ref = self.capture_ref(d).await?;
+                let token = self.next_token();
+                self.pending = Some(Pending::ExtractSemantic {
+                    step_id: step.id.clone(),
+                    token: token.clone(),
+                });
+                return Ok(Progress::Paused {
+                    request: ParentRequest::ExtractSemantic {
+                        screenshot_ref,
+                        fields: fields.clone(),
                     },
                     token,
                 });
@@ -594,6 +684,74 @@ impl FlowRun {
                     }
                 }
             }
+            Pending::Classify {
+                step_id,
+                token: expect,
+            } => {
+                if token != expect {
+                    anyhow::bail!("resume token mismatch");
+                }
+                match response {
+                    ParentResponse::State { state } => {
+                        self.parent_step_ok(step_id, format!("classify -> {state}"));
+                        self.advance(d).await
+                    }
+                    other => {
+                        anyhow::bail!("classify expects a `state` response, got {other:?}")
+                    }
+                }
+            }
+            Pending::VerifyVisual {
+                step_id,
+                token: expect,
+            } => {
+                if token != expect {
+                    anyhow::bail!("resume token mismatch");
+                }
+                match response {
+                    ParentResponse::Verified { passed } => {
+                        if passed {
+                            self.parent_step_ok(step_id, "verify_visual -> passed".into());
+                            self.advance(d).await
+                        } else {
+                            self.steps_executed += 1;
+                            self.trace.push(StepTrace {
+                                id: step_id.clone(),
+                                action: "verify_visual -> failed".into(),
+                                status: "failed".into(),
+                                detail: Some("parent reported visual mismatch".into()),
+                            });
+                            self.failed_step = Some(step_id);
+                            let result = self.finish(d).await?;
+                            Ok(Progress::Done(result))
+                        }
+                    }
+                    other => {
+                        anyhow::bail!("verify_visual expects a `verified` response, got {other:?}")
+                    }
+                }
+            }
+            Pending::ExtractSemantic {
+                step_id,
+                token: expect,
+            } => {
+                if token != expect {
+                    anyhow::bail!("resume token mismatch");
+                }
+                match response {
+                    ParentResponse::Extracted { fields } => {
+                        let n = fields.len();
+                        self.extra_outputs.extend(fields);
+                        self.parent_step_ok(step_id, format!("extract_semantic -> {n} field(s)"));
+                        self.advance(d).await
+                    }
+                    other => {
+                        anyhow::bail!(
+                            "extract_semantic expects an `extracted` response, got {other:?}"
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -612,6 +770,8 @@ impl FlowRun {
                     outputs.insert(out.key.clone(), val);
                 }
             }
+            // Fold in any parent-supplied semantic fields.
+            outputs.extend(std::mem::take(&mut self.extra_outputs));
         }
 
         let mut evidence_dir = None;
@@ -653,5 +813,8 @@ fn action_label(a: &Action) -> String {
         Action::WaitSettle => "wait_settle".into(),
         Action::Checkpoint { asserts } => format!("checkpoint ({} asserts)", asserts.len()),
         Action::Decide { goal } => format!("decide {goal:?}"),
+        Action::Classify => "classify".into(),
+        Action::VerifyVisual { expected_state } => format!("verify_visual {expected_state:?}"),
+        Action::ExtractSemantic { fields } => format!("extract_semantic {fields:?}"),
     }
 }

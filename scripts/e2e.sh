@@ -60,6 +60,13 @@ else
   bad "tier2_decide"
 fi
 
+note "tier 2 judgment (classify / verify_visual / extract_semantic)"
+if cargo test --test tier2_judgment -- --ignored --nocapture; then
+  ok "tier2_judgment"
+else
+  bad "tier2_judgment"
+fi
+
 # 4. Live view (needs an external fixture server + python websockets).
 note "live view (websocket)"
 if python3 -c "import websockets" 2>/dev/null; then
