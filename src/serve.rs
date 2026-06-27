@@ -137,6 +137,11 @@ pub async fn run() -> Result<()> {
                 write_line(&mut stdout, &out).await?;
                 continue;
             }
+            "get_resource" => {
+                let out = reply(req.id, get_resource(&flow_run, &req.params));
+                write_line(&mut stdout, &out).await?;
+                continue;
+            }
             _ => {}
         }
 
@@ -302,6 +307,21 @@ fn progress_json(progress: Progress, run: FlowRun, slot: &mut Option<FlowRun>) -
             json!({"outcome": "needs_parent", "request": request, "token": token})
         }
     }
+}
+
+/// Fetch the bytes a yielded `ParentRequest` referenced (its `screenshot_ref`),
+/// resolved against the currently suspended flow. Lets the parent actually see
+/// what it is being asked to reason over.
+fn get_resource(slot: &Option<FlowRun>, p: &Value) -> Result<Value> {
+    let id = str_param(p, "ref")?;
+    let run = slot
+        .as_ref()
+        .ok_or_else(|| anyhow!("no suspended flow holds resources"))?;
+    let bytes = run
+        .resource(&id)
+        .ok_or_else(|| anyhow!("unknown resource ref: {id}"))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(json!({"ref": id, "mime": "image/png", "len": bytes.len(), "png_base64": b64}))
 }
 
 fn parse_flow_param(p: &Value) -> Result<Flow> {

@@ -80,6 +80,11 @@ runs over `serve`, where the browser persists across the suspension.
   "request":{"request":"reidentify_element","screenshot_ref":"…","description":"…"},
   "token":"run_…:1"}}
 
+// The parent can fetch the referenced screenshot bytes to reason over them
+// (the ref is the blake3 hash of the PNG):
+{"id":9,"method":"get_resource","params":{"ref":"…"}}
+{"id":9,"result":{"ref":"…","mime":"image/png","len":12345,"png_base64":"…"}}
+
 // The parent resolves it and resumes with a typed response:
 {"id":2,"method":"flow_resume","params":{"token":"run_…:1",
   "response":{"response":"element","selector":".product_pod h3 a"}}}

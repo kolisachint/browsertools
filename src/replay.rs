@@ -343,6 +343,10 @@ pub struct FlowRun {
     overrides: Overrides,
     pending: Option<Pending>,
     token_seq: u64,
+    /// Evidence bytes referenced by a yielded request (`screenshot_ref` -> PNG),
+    /// so the parent can fetch what it is being asked to reason over while the
+    /// run is suspended. Lives only as long as the run.
+    resources: BTreeMap<String, Vec<u8>>,
 }
 
 impl FlowRun {
@@ -368,12 +372,18 @@ impl FlowRun {
             overrides: Overrides::default(),
             pending: None,
             token_seq: 0,
+            resources: BTreeMap::new(),
         })
     }
 
     fn next_token(&mut self) -> ResumeToken {
         self.token_seq += 1;
         format!("{}:{}", self.run_id, self.token_seq)
+    }
+
+    /// Fetch evidence bytes a yielded request referenced (e.g. its screenshot).
+    pub fn resource(&self, id: &str) -> Option<&[u8]> {
+        self.resources.get(id).map(|v| v.as_slice())
     }
 
     fn ok_step(&mut self, id: String, label: String) {
@@ -414,6 +424,9 @@ impl FlowRun {
                         // re-identify the element rather than failing the run.
                         let png = d.screenshot(false).await?;
                         let screenshot_ref = blake3::hash(&png).to_hex().to_string();
+                        // Retain the bytes so the parent can fetch them by ref
+                        // (get_resource) while deciding how to re-identify.
+                        self.resources.insert(screenshot_ref.clone(), png);
                         let token = self.next_token();
                         let description =
                             format!("{label}: selector {selector:?} no longer matches ({e:#})");

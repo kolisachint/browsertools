@@ -116,6 +116,25 @@ fn drifted_selector_yields_then_resumes() {
         "request must carry a screenshot_ref: {r}"
     );
     let token = r["token"].as_str().expect("resume token").to_string();
+    let screenshot_ref = r["request"]["screenshot_ref"].as_str().unwrap().to_string();
+
+    // The parent fetches the referenced screenshot bytes while suspended, and
+    // they must be real PNG bytes that hash back to the ref (it is the blake3).
+    let fetch = serde_json::json!({
+        "id": 10, "method": "get_resource", "params": { "ref": screenshot_ref }
+    });
+    writeln!(stdin, "{fetch}").unwrap();
+    let res = read_json(&mut reader);
+    assert!(res.get("error").is_none(), "get_resource errored: {res}");
+    let b64 = res["result"]["png_base64"].as_str().expect("png_base64");
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+        .expect("valid base64");
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "must be a PNG");
+    assert_eq!(
+        blake3::hash(&bytes).to_hex().to_string(),
+        screenshot_ref,
+        "fetched bytes must hash back to the screenshot_ref"
+    );
 
     // Parent (playing the LLM) hands back the corrected selector.
     let resume = serde_json::json!({
