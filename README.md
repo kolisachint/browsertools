@@ -63,6 +63,35 @@ target/debug/browsertools serve
 {"id":3,"method":"shutdown"}
 ```
 
+## Parent-in-the-loop replay (Tier 2)
+
+Replay normally needs no model. When a flow hits something only an LLM can
+resolve — today, a click whose selector has *drifted* off the live DOM — the
+engine does not fail: it **suspends** and yields a typed `ParentRequest` so the
+parent (the LLM agent) can resolve it, then **resumes** deterministically. This
+runs over `serve`, where the browser persists across the suspension.
+
+```jsonc
+// Start a flow (inline `flow` object or `flow_path`, plus vars):
+{"id":1,"method":"flow_start","params":{"flow":{...},"vars":{"base":"http://…/"}}}
+
+// If the engine needs help it replies with a pause instead of a result:
+{"id":1,"result":{"outcome":"needs_parent",
+  "request":{"request":"reidentify_element","screenshot_ref":"…","description":"…"},
+  "token":"run_…:1"}}
+
+// The parent resolves it and resumes with a typed response:
+{"id":2,"method":"flow_resume","params":{"token":"run_…:1",
+  "response":{"response":"element","selector":".product_pod h3 a"}}}
+
+// …which runs to completion (or pauses again):
+{"id":2,"result":{"outcome":"complete","result":{"status":"success", …}}}
+```
+
+The request/response variants are the frozen contract in `src/contract.rs`;
+`ReidentifyElement` is the one wired today, the rest drop into the same
+pause/resume machinery. See `tests/tier2_reidentify.rs` for a full round-trip.
+
 ## Live view
 
 `serve` exposes `live_view_start`, which returns an HTTP URL; connect a
@@ -75,12 +104,13 @@ Fast, pure-logic tests run with plain `cargo test`. The browser-driving paths
 need real Chromium and are marked `#[ignore]`:
 
 ```bash
-# The whole end-to-end gate (replay thesis + serve + live view):
+# The whole end-to-end gate (replay thesis + serve + tier 2 + live view):
 bash scripts/e2e.sh
 
 # Or individually:
-cargo test --test thesis_replay    -- --ignored --nocapture   # 20x deterministic replay
-cargo test --test serve_primitives -- --ignored --nocapture   # stdio protocol
+cargo test --test thesis_replay     -- --ignored --nocapture   # 20x deterministic replay
+cargo test --test serve_primitives  -- --ignored --nocapture   # stdio protocol
+cargo test --test tier2_reidentify  -- --ignored --nocapture   # yield/resume contract
 ```
 
 The thesis test asserts extraction is identical across 20 cold runs. It also

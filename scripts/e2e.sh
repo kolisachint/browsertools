@@ -7,7 +7,8 @@
 # Surfaces covered:
 #   1. replay thesis      — run-flow CLI, 20x deterministic replay
 #   2. serve primitives   — stdio JSON-RPC protocol
-#   3. live view          — WebSocket screencast + synced action events (opt)
+#   3. tier 2 reidentify  — yield NeedsParent on drift, resume, complete
+#   4. live view          — WebSocket screencast + synced action events (opt)
 #
 # Usage:  bash scripts/e2e.sh
 # Exit:   0 only if every selected surface passes.
@@ -44,7 +45,15 @@ else
   bad "serve_primitives"
 fi
 
-# 3. Live view (needs an external fixture server + python websockets).
+# 3. Tier 2 parent-in-the-loop (self-hosts its fixture server on :8736).
+note "tier 2 reidentify (yield/resume)"
+if cargo test --test tier2_reidentify -- --ignored --nocapture; then
+  ok "tier2_reidentify"
+else
+  bad "tier2_reidentify"
+fi
+
+# 4. Live view (needs an external fixture server + python websockets).
 note "live view (websocket)"
 if python3 -c "import websockets" 2>/dev/null; then
   python3 -m http.server 8732 --directory fixtures/site >/dev/null 2>&1 &
