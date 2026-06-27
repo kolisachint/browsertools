@@ -62,6 +62,24 @@ pub enum Action {
     Checkpoint {
         asserts: Vec<Invariant>,
     },
+    /// A delegated decision point (Tier 2): the engine has no recorded action
+    /// for this state and asks the parent what to do next. Only resolvable in the
+    /// parent-in-the-loop `serve` path; one-shot replay treats it as a failure.
+    Decide {
+        goal: String,
+    },
+    /// Ask the parent to classify the current page state (Tier 2).
+    Classify,
+    /// Ask the parent to confirm the page visually matches `expected_state`
+    /// (Tier 2). A `false` verdict fails the run, like a checkpoint.
+    VerifyVisual {
+        expected_state: String,
+    },
+    /// Ask the parent to read `fields` that live in pixels, not the text DOM
+    /// (Tier 2). Returned values are merged into the run outputs.
+    ExtractSemantic {
+        fields: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
