@@ -62,6 +62,12 @@ pub enum Action {
     Checkpoint {
         asserts: Vec<Invariant>,
     },
+    /// A delegated decision point (Tier 2): the engine has no recorded action
+    /// for this state and asks the parent what to do next. Only resolvable in the
+    /// parent-in-the-loop `serve` path; one-shot replay treats it as a failure.
+    Decide {
+        goal: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -238,6 +238,11 @@ async fn exec_step(
             }
             *checkpoints_passed += 1;
         }
+        Action::Decide { .. } => {
+            anyhow::bail!(
+                "a `decide` step needs a parent; run it via serve flow_start, not one-shot replay"
+            );
+        }
     }
     Ok(())
 }
@@ -307,6 +312,8 @@ async fn extract(d: &Driver, source: &Source) -> Result<String> {
 enum Pending {
     /// A required click drifted; we asked the parent to re-identify the element.
     Reidentify { step_id: String, token: ResumeToken },
+    /// A `decide` step; we asked the parent for the next action to take.
+    Decide { step_id: String, token: ResumeToken },
 }
 
 /// Corrective inputs the parent supplied via `resume`, keyed by step.
@@ -457,6 +464,28 @@ impl FlowRun {
                 continue;
             }
 
+            // A decision point: observe and ask the parent what to do next.
+            if let Action::Decide { goal } = &step.action {
+                let png = d.screenshot(false).await?;
+                let screenshot_ref = blake3::hash(&png).to_hex().to_string();
+                self.resources.insert(screenshot_ref.clone(), png);
+                let mut observation = d.observe().await?;
+                observation.screenshot_ref = screenshot_ref.clone();
+                let token = self.next_token();
+                self.pending = Some(Pending::Decide {
+                    step_id: step.id.clone(),
+                    token: token.clone(),
+                });
+                return Ok(Progress::Paused {
+                    request: ParentRequest::DecideNextAction {
+                        screenshot_ref,
+                        observation,
+                        goal: goal.clone(),
+                    },
+                    token,
+                });
+            }
+
             match exec_step(d, &step.action, &self.vars, &mut self.checkpoints_passed).await {
                 Ok(()) => self.ok_step(step.id.clone(), label),
                 Err(e) => {
@@ -502,23 +531,68 @@ impl FlowRun {
             .pending
             .take()
             .ok_or_else(|| anyhow::anyhow!("no pending parent request to resume"))?;
-        match (pending, response) {
-            (
-                Pending::Reidentify {
-                    step_id,
-                    token: expect,
-                },
-                ParentResponse::Element { selector },
-            ) => {
+        match pending {
+            Pending::Reidentify {
+                step_id,
+                token: expect,
+            } => {
                 if token != expect {
                     anyhow::bail!("resume token mismatch");
                 }
-                self.overrides.click_selector.insert(step_id, selector);
-                // Cursor is unchanged: advance re-runs the step with the override.
-                self.advance(d).await
+                match response {
+                    ParentResponse::Element { selector } => {
+                        self.overrides.click_selector.insert(step_id, selector);
+                        // Cursor unchanged: advance re-runs the step with the override.
+                        self.advance(d).await
+                    }
+                    other => {
+                        anyhow::bail!("reidentify expects an `element` response, got {other:?}")
+                    }
+                }
             }
-            (Pending::Reidentify { .. }, other) => {
-                anyhow::bail!("reidentify expects an `element` response, got {other:?}")
+            Pending::Decide {
+                step_id,
+                token: expect,
+            } => {
+                if token != expect {
+                    anyhow::bail!("resume token mismatch");
+                }
+                match response {
+                    ParentResponse::NextAction { action } => {
+                        let parsed: Action = serde_json::from_value(action)
+                            .map_err(|e| anyhow::anyhow!("invalid next_action: {e}"))?;
+                        let label = format!("decide -> {}", action_label(&parsed));
+                        self.steps_executed += 1;
+                        match exec_step(d, &parsed, &self.vars, &mut self.checkpoints_passed).await
+                        {
+                            Ok(()) => {
+                                self.steps_succeeded += 1;
+                                self.trace.push(StepTrace {
+                                    id: step_id,
+                                    action: label,
+                                    status: "ok".into(),
+                                    detail: None,
+                                });
+                                self.cursor += 1;
+                                self.advance(d).await
+                            }
+                            Err(e) => {
+                                self.trace.push(StepTrace {
+                                    id: step_id.clone(),
+                                    action: label,
+                                    status: "failed".into(),
+                                    detail: Some(format!("{e:#}")),
+                                });
+                                self.failed_step = Some(step_id);
+                                let result = self.finish(d).await?;
+                                Ok(Progress::Done(result))
+                            }
+                        }
+                    }
+                    other => {
+                        anyhow::bail!("decide expects a `next_action` response, got {other:?}")
+                    }
+                }
             }
         }
     }
@@ -578,5 +652,6 @@ fn action_label(a: &Action) -> String {
         Action::Select { selector, .. } => format!("select {selector}"),
         Action::WaitSettle => "wait_settle".into(),
         Action::Checkpoint { asserts } => format!("checkpoint ({} asserts)", asserts.len()),
+        Action::Decide { goal } => format!("decide {goal:?}"),
     }
 }

@@ -66,10 +66,16 @@ target/debug/browsertools serve
 ## Parent-in-the-loop replay (Tier 2)
 
 Replay normally needs no model. When a flow hits something only an LLM can
-resolve — today, a click whose selector has *drifted* off the live DOM — the
-engine does not fail: it **suspends** and yields a typed `ParentRequest` so the
-parent (the LLM agent) can resolve it, then **resumes** deterministically. This
-runs over `serve`, where the browser persists across the suspension.
+resolve, the engine does not fail: it **suspends** and yields a typed
+`ParentRequest` so the parent (the LLM agent) can resolve it, then **resumes**
+deterministically. This runs over `serve`, where the browser persists across the
+suspension. Two yield points are wired today:
+
+- **`reidentify_element`** — a click whose selector has *drifted* off the live
+  DOM; the parent supplies a corrected selector.
+- **`decide_next_action`** — a `decide` step (a recorded decision point with no
+  fixed action); the engine hands over the page `observation` and the parent
+  returns the concrete primitive action to run next.
 
 ```jsonc
 // Start a flow (inline `flow` object or `flow_path`, plus vars):
@@ -94,8 +100,9 @@ runs over `serve`, where the browser persists across the suspension.
 ```
 
 The request/response variants are the frozen contract in `src/contract.rs`;
-`ReidentifyElement` is the one wired today, the rest drop into the same
-pause/resume machinery. See `tests/tier2_reidentify.rs` for a full round-trip.
+`ReidentifyElement` and `DecideNextAction` are wired today, the remaining
+variants drop into the same pause/resume machinery. See
+`tests/tier2_reidentify.rs` and `tests/tier2_decide.rs` for full round-trips.
 
 ## Live view
 
