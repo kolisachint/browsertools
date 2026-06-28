@@ -57,17 +57,40 @@ pub struct Driver {
 }
 
 impl Driver {
-    /// Launch a headless Chromium and open a blank page.
+    /// Launch a Chromium and open a blank page.
+    ///
+    /// Headless by default; set `BROWSERTOOLS_HEADFUL=1` to launch a real,
+    /// on-screen window (useful for watching a flow run live on a desktop).
     ///
     /// Outbound HTTPS in this environment goes through the agent proxy, and TLS is
     /// re-terminated there, so Chromium must (a) route through the proxy and
     /// (b) trust the proxy CA via the NSS store at `$HOME/.pki/nssdb`.
     pub async fn launch() -> Result<Self> {
+        // A fresh per-launch profile dir. chromiumoxide otherwise defaults every
+        // launch to a single shared `chromiumoxide-runner` dir, whose SingletonLock
+        // collides when a prior Chromium lingers or two instances overlap.
+        let user_data_dir = std::env::temp_dir().join(format!(
+            "browsertools-profile-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        let headful = std::env::var("BROWSERTOOLS_HEADFUL")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chromium_path())
             .disable_default_args()
-            .new_headless_mode()
-            .no_sandbox()
+            .user_data_dir(&user_data_dir)
+            .no_sandbox();
+        if !headful {
+            builder = builder.new_headless_mode();
+        }
+        let mut builder = builder
             .arg("--disable-gpu")
             .arg("--disable-dev-shm-usage")
             .arg("--no-first-run")
