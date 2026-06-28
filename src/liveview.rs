@@ -46,8 +46,15 @@ impl LiveView {
 
         // Frame source: interval JPEG capture into a raw base64 channel, then
         // re-published as LiveMsg::Frame so frames and actions share one stream.
+        //
+        // Headless: a brisk 160ms (~6fps) since the only way to "see" the page is
+        // this stream. Headful: the user already watches the real window, and each
+        // CDP screenshot forces a synchronous compositor frame that visibly fights
+        // that window (flicker), so capture far less often — just enough to keep
+        // the mirror roughly current.
+        let interval_ms = if driver.is_headful() { 500 } else { 160 };
         let (raw_tx, mut raw_rx) = broadcast::channel::<String>(8);
-        let frames = driver.start_frame_stream(raw_tx, 160).await?;
+        let frames = driver.start_frame_stream(raw_tx, interval_ms).await?;
         let pump_tx = tx.clone();
         let frame_pump = tokio::spawn(async move {
             while let Ok(b64) = raw_rx.recv().await {

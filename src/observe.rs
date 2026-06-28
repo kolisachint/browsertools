@@ -10,6 +10,15 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Caps on how many facts of each kind an `Observation` carries. The parent
+/// already gets a screenshot; these arrays are a deterministic supplement, not a
+/// full DOM dump. Without caps, a busy page (e.g. a hotel search with hundreds
+/// of controls) serializes thousands of mostly-empty entries straight into the
+/// model context. Keep the most useful, named entries and summarize the rest.
+const MAX_INPUTS: usize = 40;
+const MAX_LANDMARKS: usize = 30;
+const MAX_TEXT_BLOCKS: usize = 40;
+
 /// Opaque reference the parent can use to fetch a screenshot's bytes.
 pub type ResourceId = String;
 
@@ -75,6 +84,16 @@ pub fn state_signature(html: &str) -> String {
     blake3::hash(skeleton.as_bytes()).to_hex().to_string()
 }
 
+/// Append a synthetic "+N more (omitted)" entry when a capped list dropped
+/// entries, so the parent knows the view is partial. `total` is the count of
+/// kept-eligible items seen before capping; `list` holds the items actually kept.
+fn push_overflow_marker<T>(list: &mut Vec<T>, total: usize, make: impl FnOnce(usize) -> T) {
+    if total > list.len() {
+        let dropped = total - list.len();
+        list.push(make(dropped));
+    }
+}
+
 /// Extract the deterministic, content-bearing facts an LLM would want to reason
 /// over. Pure: takes HTML, returns facts. The caller supplies url/screenshot.
 pub fn analyze(html: &str) -> AnalyzedFacts {
@@ -86,8 +105,12 @@ pub fn analyze(html: &str) -> AnalyzedFacts {
         .map(|e| e.text().collect::<String>().trim().to_string())
         .unwrap_or_default();
 
-    // Inputs / controls — no values, just shape.
+    // Inputs / controls — no values, just shape. An addressable control (one with
+    // a real selector or an accessible name) is worth far more to the parent than
+    // an anonymous `<button>` with no name, of which busy pages have hundreds. Keep
+    // named/addressable ones first and cap the list; record how many were dropped.
     let mut inputs = Vec::new();
+    let mut inputs_total = 0usize;
     let ctrl = Selector::parse("input,select,textarea,button").unwrap();
     for el in doc.select(&ctrl) {
         let v = el.value();
@@ -101,6 +124,16 @@ pub fn analyze(html: &str) -> AnalyzedFacts {
             .or_else(|| v.attr("name"))
             .unwrap_or("")
             .to_string();
+        let has_stable_selector = v.attr("id").is_some() || v.attr("name").is_some();
+        // Drop pure noise: an unnamed control with no stable selector is not
+        // actionable and only inflates the payload.
+        if accessible_name.is_empty() && !has_stable_selector {
+            continue;
+        }
+        inputs_total += 1;
+        if inputs.len() >= MAX_INPUTS {
+            continue;
+        }
         let selector_hint = if let Some(id) = v.attr("id") {
             format!("#{id}")
         } else if let Some(name) = v.attr("name") {
@@ -114,25 +147,66 @@ pub fn analyze(html: &str) -> AnalyzedFacts {
             selector_hint,
         });
     }
+    push_overflow_marker(&mut inputs, inputs_total, |dropped| InputFact {
+        kind: "_more".to_string(),
+        accessible_name: format!("+{dropped} more controls (omitted)"),
+        selector_hint: String::new(),
+    });
 
-    // Landmarks.
+    // Landmarks. De-duplicate (role,name) pairs — repeated nameless dialogs/lists
+    // add nothing — and cap. Nameless generic roles are dropped as noise.
     let mut landmarks = Vec::new();
+    let mut landmarks_total = 0usize;
+    let mut seen_landmarks: BTreeSet<(String, String)> = BTreeSet::new();
     let land = Selector::parse("nav,main,header,footer,form,[role]").unwrap();
     for el in doc.select(&land) {
         let v = el.value();
         let role = v.attr("role").unwrap_or(v.name()).to_string();
         let name = v.attr("aria-label").unwrap_or("").to_string();
+        // Skip generic, nameless presentational roles that carry no signal.
+        if name.is_empty()
+            && matches!(
+                role.as_str(),
+                "presentation" | "none" | "document" | "tooltip"
+            )
+        {
+            continue;
+        }
+        if !seen_landmarks.insert((role.clone(), name.clone())) {
+            continue;
+        }
+        landmarks_total += 1;
+        if landmarks.len() >= MAX_LANDMARKS {
+            continue;
+        }
         landmarks.push(Landmark { role, name });
     }
+    push_overflow_marker(&mut landmarks, landmarks_total, |dropped| Landmark {
+        role: "_more".to_string(),
+        name: format!("+{dropped} more landmarks (omitted)"),
+    });
 
-    // Salient text: headings and alert regions.
+    // Salient text: headings and alert regions. De-duplicate and cap.
     let mut text_blocks = Vec::new();
+    let mut text_total = 0usize;
+    let mut seen_text: BTreeSet<String> = BTreeSet::new();
     let heads = Selector::parse("h1,h2,h3,[role=alert]").unwrap();
     for el in doc.select(&heads) {
         let t = el.text().collect::<String>().trim().to_string();
-        if !t.is_empty() {
-            text_blocks.push(t);
+        if t.is_empty() || !seen_text.insert(t.clone()) {
+            continue;
         }
+        text_total += 1;
+        if text_blocks.len() >= MAX_TEXT_BLOCKS {
+            continue;
+        }
+        text_blocks.push(t);
+    }
+    if text_total > text_blocks.len() {
+        text_blocks.push(format!(
+            "+{} more (omitted)",
+            text_total - text_blocks.len()
+        ));
     }
 
     // Error region heuristic.
@@ -217,5 +291,46 @@ mod tests {
         assert!(f.text_blocks.iter().any(|t| t == "Book 1"));
         assert!(f.landmarks.iter().any(|l| l.role == "nav"));
         assert!(!f.has_error_region);
+    }
+
+    #[test]
+    fn unnamed_anonymous_controls_are_dropped() {
+        // Buttons with neither a name nor a stable selector are pure noise.
+        let html = r#"<!doctype html><html><body>
+            <button></button><button></button>
+            <button id="go">Go</button>
+            <input aria-label="Search">
+        </body></html>"#;
+        let f = analyze(html);
+        // Only the two addressable controls survive; the anonymous buttons drop.
+        assert_eq!(f.inputs.len(), 2);
+        assert!(f.inputs.iter().any(|i| i.selector_hint == "#go"));
+        assert!(f.inputs.iter().any(|i| i.accessible_name == "Search"));
+    }
+
+    #[test]
+    fn inputs_are_capped_with_overflow_marker() {
+        // Generate many addressable buttons to exceed MAX_INPUTS.
+        let mut html = String::from("<!doctype html><html><body>");
+        for i in 0..(MAX_INPUTS + 25) {
+            html.push_str(&format!("<button id=\"b{i}\">B{i}</button>"));
+        }
+        html.push_str("</body></html>");
+        let f = analyze(&html);
+        // Capped to MAX_INPUTS kept entries plus one overflow marker.
+        assert_eq!(f.inputs.len(), MAX_INPUTS + 1);
+        let marker = f.inputs.last().unwrap();
+        assert_eq!(marker.kind, "_more");
+        assert!(marker.accessible_name.contains("more controls"));
+    }
+
+    #[test]
+    fn duplicate_text_blocks_are_deduped() {
+        let html = r#"<!doctype html><html><body>
+            <h1>Same</h1><h2>Same</h2><h3>Different</h3>
+        </body></html>"#;
+        let f = analyze(html);
+        assert_eq!(f.text_blocks.iter().filter(|t| *t == "Same").count(), 1);
+        assert!(f.text_blocks.iter().any(|t| t == "Different"));
     }
 }

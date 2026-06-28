@@ -20,6 +20,23 @@ fn chromium_path() -> String {
     std::env::var("CHROME_PATH").unwrap_or_else(|_| "/opt/pw-browsers/chromium".to_string())
 }
 
+/// Window size for a headful launch. Parsed from `BROWSERTOOLS_WINDOW_SIZE`
+/// (format `"<width>,<height>"`, e.g. `"1920,1080"`), defaulting to a roomy
+/// 1600x1000 so the window isn't pinned to Chromium's cramped 800x600 default.
+fn parse_window_size() -> (u32, u32) {
+    const DEFAULT: (u32, u32) = (1600, 1000);
+    let Ok(raw) = std::env::var("BROWSERTOOLS_WINDOW_SIZE") else {
+        return DEFAULT;
+    };
+    let Some((w, h)) = raw.split_once([',', 'x', 'X']) else {
+        return DEFAULT;
+    };
+    match (w.trim().parse::<u32>(), h.trim().parse::<u32>()) {
+        (Ok(w), Ok(h)) if w >= 320 && h >= 240 => (w, h),
+        _ => DEFAULT,
+    }
+}
+
 /// Result of waiting for the page to settle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettleInfo {
@@ -54,6 +71,10 @@ pub struct Driver {
     browser: Browser,
     page: Page,
     _handler: tokio::task::JoinHandle<()>,
+    /// Whether this session launched a real on-screen window. The live-view
+    /// frame stream uses a gentler capture cadence when true so the periodic
+    /// CDP screenshots don't fight the real window's compositor (flicker).
+    headful: bool,
 }
 
 impl Driver {
@@ -82,6 +103,10 @@ impl Driver {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
+        // Window size for a headful window. Honors BROWSERTOOLS_WINDOW_SIZE="W,H";
+        // otherwise opens a roomy 1600x1000 instead of Chromium's cramped default.
+        let window_size = headful.then(parse_window_size);
+
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chromium_path())
             .disable_default_args()
@@ -92,20 +117,37 @@ impl Driver {
             // injects --headless. Skipping new_headless_mode() is not enough; we
             // must explicitly force a headed window or no window ever appears.
             builder = builder.with_head();
+            // chromiumoxide defaults the viewport to 800x600 *emulation*, which
+            // pins page content to that box no matter how large the OS window is —
+            // exactly the "locked, tiny" window users see. Disable viewport
+            // emulation so the page fills the real window, and size the window.
+            builder = builder.viewport(None);
+            if let Some((w, h)) = window_size {
+                builder = builder.window_size(w, h);
+            }
         } else {
             builder = builder.new_headless_mode();
         }
         let mut builder = builder
-            .arg("--disable-gpu")
             .arg("--disable-dev-shm-usage")
             .arg("--no-first-run")
             .arg("--mute-audio")
-            .arg("--disable-software-rasterizer")
             .arg("--disable-background-networking")
             .arg("--disable-default-apps")
             .arg("--disable-extensions")
             .arg("--disable-sync")
             .arg("--noerrdialogs");
+        if headful {
+            // A real on-screen window must composite through the GPU/skia path.
+            // Forcing --disable-gpu + --disable-software-rasterizer (needed for a
+            // stable headless raster) makes a headed window repaint/tear, which is
+            // the visible "flicker". Start maximized so it fills the display.
+            builder = builder.arg("--start-maximized");
+        } else {
+            builder = builder
+                .arg("--disable-gpu")
+                .arg("--disable-software-rasterizer");
+        }
 
         // Route external traffic through the agent proxy. Chromium bypasses
         // loopback by default, so local fixture servers are reached directly.
@@ -131,7 +173,13 @@ impl Driver {
             browser,
             page,
             _handler: handler,
+            headful,
         })
+    }
+
+    /// Whether this session launched a real on-screen (headful) window.
+    pub fn is_headful(&self) -> bool {
+        self.headful
     }
 
     /// Navigate to a URL and wait for it to settle.
