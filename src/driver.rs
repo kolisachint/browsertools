@@ -87,7 +87,12 @@ impl Driver {
             .disable_default_args()
             .user_data_dir(&user_data_dir)
             .no_sandbox();
-        if !headful {
+        if headful {
+            // chromiumoxide's BrowserConfig defaults to HeadlessMode::True, which
+            // injects --headless. Skipping new_headless_mode() is not enough; we
+            // must explicitly force a headed window or no window ever appears.
+            builder = builder.with_head();
+        } else {
             builder = builder.new_headless_mode();
         }
         let mut builder = builder
