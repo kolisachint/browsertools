@@ -124,7 +124,8 @@ frozen before Phase 2 needs them; they are **not exercised** in the MVP.
 ```rust
 struct Flow {
     id: String, name: String, version: u32,
-    start_url: String,
+    start_url: String,    // auto-navigated before the first step runs
+                          // ({{vars}}-resolved); no leading `navigate` needed
     vars:    Vec<VarSpec>,     // { key, required, example }
     steps:   Vec<Step>,
     outputs: Vec<OutputSpec>,  // { key, source }

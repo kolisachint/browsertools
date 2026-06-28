@@ -69,6 +69,11 @@ pub async fn run(
     let start = Instant::now();
     let run_id = now_run_id();
 
+    // Land on the flow's start_url before running any steps. Without this the
+    // browser sits on about:blank and every step (or the first `decide`/observe)
+    // sees an empty page. Resolves `{{vars}}` the same way Navigate steps do.
+    driver.navigate(&resolve(&flow.start_url, vars)).await?;
+
     let mut trace = Vec::new();
     let mut steps_executed = 0usize;
     let mut steps_succeeded = 0usize;
@@ -361,6 +366,11 @@ pub struct FlowRun {
     overrides: Overrides,
     pending: Option<Pending>,
     token_seq: u64,
+    /// Whether the run has navigated to `flow.start_url` yet. The very first
+    /// `advance` lands on the start page; subsequent advances (after a parent
+    /// resume) must not re-navigate, or they would blow away the page state the
+    /// parent just acted on.
+    started: bool,
     /// Evidence bytes referenced by a yielded request (`screenshot_ref` -> PNG),
     /// so the parent can fetch what it is being asked to reason over while the
     /// run is suspended. Lives only as long as the run.
@@ -393,6 +403,7 @@ impl FlowRun {
             overrides: Overrides::default(),
             pending: None,
             token_seq: 0,
+            started: false,
             resources: BTreeMap::new(),
             extra_outputs: BTreeMap::new(),
         })
@@ -452,6 +463,16 @@ impl FlowRun {
 
     /// Drive the flow forward until it completes or needs the parent.
     pub async fn advance(&mut self, d: &Driver) -> Result<Progress> {
+        // On the very first advance, land on the flow's start_url so steps and
+        // observations run against the real page rather than about:blank. Guarded
+        // by `started` so a resume (which re-enters advance) never re-navigates
+        // and discards the state the parent just acted on.
+        if !self.started {
+            self.started = true;
+            d.navigate(&resolve(&self.flow.start_url, &self.vars))
+                .await?;
+        }
+
         while self.cursor < self.flow.steps.len() {
             let step = self.flow.steps[self.cursor].clone();
             let label = action_label(&step.action);
